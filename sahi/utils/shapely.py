@@ -1,5 +1,7 @@
 """Shapely-based geometry utilities for polygon and segmentation handling."""
 
+import numpy as np
+import shapely
 from shapely.geometry import (
     CAP_STYLE,
     JOIN_STYLE,
@@ -35,12 +37,13 @@ def filter_polygons(geometry: GeometryCollection | Polygon | MultiPolygon) -> Mu
 
 def get_shapely_multipolygon(coco_segmentation: list[list]) -> MultiPolygon:
     """Accepts coco style polygon coords and converts it to valid shapely multipolygon object."""
-    polygon_list = []
-    for coco_polygon in coco_segmentation:
-        point_list = list(zip(coco_polygon[0::2], coco_polygon[1::2]))
-        shapely_polygon = Polygon(point_list)
-        polygon_list.append(shapely_polygon)
-    shapely_multipolygon = MultiPolygon(polygon_list)
+    # reshape each flat [x1, y1, x2, y2, ...] list into (n, 2) float points; an odd trailing value is dropped
+    polygon_list = [
+        Polygon(np.asarray(coco_polygon, dtype=float)[: len(coco_polygon) // 2 * 2].reshape(-1, 2))
+        for coco_polygon in coco_segmentation
+    ]
+    # the vectorized constructor skips the MultiPolygon wrapper's per-part checks; parts are already Polygons
+    shapely_multipolygon = shapely.multipolygons(polygon_list) if polygon_list else MultiPolygon()
 
     if not shapely_multipolygon.is_valid:
         shapely_multipolygon = filter_polygons(make_valid(shapely_multipolygon))
@@ -113,12 +116,8 @@ class ShapelyAnnotation:
     def multipolygon(self, multipolygon: MultiPolygon) -> None:
         """Set multipolygon and compute total area."""
         self.__multipolygon = multipolygon
-        # calculate areas of all polygons
-        area = 0
-        for shapely_polygon in multipolygon.geoms:
-            area += shapely_polygon.area
-        # set instance area
-        self.__area = area
+        # GEOS sums the part areas in order, matching a per-polygon loop
+        self.__area = multipolygon.area
 
     @property
     def area(self) -> int:
